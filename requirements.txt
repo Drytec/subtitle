@@ -1,3 +1,9 @@
 flask
 requests
+opencv-python-headless
 moviepy
+transformers
+torch
+accelerate
+numpy
+Pillow

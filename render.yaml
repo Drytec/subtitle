@@ -1,10 +1,6 @@
 services:
   - type: web
-    name: subtitle-service
+    name: video-subtitles
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
-    envVars:
-      - key: ASSEMBLYAI_API_KEY
-        sync: false
+    startCommand: python app.py
