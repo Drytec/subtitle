@@ -1,11 +1,9 @@
 from flask import Flask, request, jsonify
-import requests, tempfile, os
-from moviepy.editor import VideoFileClip
+import requests, tempfile, os, cv2
 from transformers import pipeline
 
 app = Flask(__name__)
 
-# Modelo de descripción de video (usa visión + lenguaje)
 captioner = pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
 
 @app.route("/describe", methods=["POST"])
@@ -17,22 +15,32 @@ def describe_video():
         return jsonify({"error": "Missing video_url"}), 400
 
     try:
-        # Descargar el video
         response = requests.get(video_url)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             tmp.write(response.content)
             tmp_path = tmp.name
 
-        # Extraer frames del video
-        clip = VideoFileClip(tmp_path)
-        duration = clip.duration
-        interval = max(1, int(duration // 5))  # 5 descripciones por video
-        frames = [clip.get_frame(t) for t in range(0, int(duration), interval)]
+        cap = cv2.VideoCapture(tmp_path)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if frame_count == 0:
+            return jsonify({"error": "El video no tiene fotogramas válidos"}), 400
 
-        # Generar descripciones
+        interval = max(1, frame_count // 5)
+        frames = []
+        for i in range(0, frame_count, interval):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(frame)
+        cap.release()
+
+        if not frames:
+            return jsonify({"error": "No se pudieron extraer imágenes del video"}), 400
+
         descriptions = [captioner(frame)[0]["generated_text"] for frame in frames]
-
         os.remove(tmp_path)
+
         return jsonify({"subtitles": descriptions})
 
     except Exception as e:
