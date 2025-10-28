@@ -1,36 +1,27 @@
-from fastapi import FastAPI, UploadFile, Form
 from transformers import pipeline
-import tempfile
-import requests
+from flask import Flask, request, jsonify
+import torch
 
-app = FastAPI()
+app = Flask(__name__)
 
-model = pipeline("automatic-speech-recognition", model="openai/whisper-tiny.en")
+# 🧠 Cargar modelo solo una vez
+device = 0 if torch.cuda.is_available() else -1
+whisper = pipeline("automatic-speech-recognition", model="openai/whisper-tiny", device=device)
 
-@app.post("/subtitles")
-async def generate_subtitles(file: UploadFile):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+@app.route("/subtitles_from_url", methods=["POST"])
+def generate_subtitles():
+    try:
+        video_url = request.form["url"]
 
-    result = model(tmp_path)
-    return {"text": result["text"]}
+        # Descargar solo el audio
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-i", video_url, "-vn", "-acodec", "mp3", "audio.mp3"], check=True)
 
+        result = whisper("audio.mp3")  # Transcripción
+        return jsonify({"text": result["text"]})
 
-@app.post("/subtitles_from_url")
-async def generate_subtitles_from_url(url: str = Form(...)):
-    response = requests.get(url, stream=True)
-    if response.status_code != 200:
-        return {"error": f"No se pudo descargar el video desde {url}"}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        size = 0
-        for chunk in response.iter_content(chunk_size=8192):
-            size += len(chunk)
-            if size > 15 * 1024 * 1024:  
-                break
-            tmp.write(chunk)
-        tmp_path = tmp.name
-
-    result = model(tmp_path)
-    return {"text": result["text"]}
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
