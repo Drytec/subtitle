@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify
-import requests, cv2, tempfile, os
+import requests, tempfile, os
+from moviepy.editor import VideoFileClip
 
 app = Flask(__name__)
 
-# Modelo gratuito de Hugging Face
+# Modelo gratuito en Hugging Face
 HF_API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
 
 
@@ -18,30 +19,29 @@ def generate_descriptive_subtitles(video_url):
                     tmp.write(chunk)
                 tmp_path = tmp.name
 
-        # Paso 2️⃣ — Capturar un fotograma representativo (segundo 2)
-        cap = cv2.VideoCapture(tmp_path)
-        cap.set(cv2.CAP_PROP_POS_MSEC, 2000)
-        success, frame = cap.read()
-        cap.release()
+        # Paso 2️⃣ — Capturar un fotograma (segundo 2)
+        clip = VideoFileClip(tmp_path)
+        frame = clip.get_frame(2.0)
+        clip.close()
 
-        if not success:
-            return {"error": "No se pudo leer el video o está dañado"}
+        # Paso 3️⃣ — Convertir el fotograma a bytes JPG
+        import io
+        from PIL import Image
+        img_bytes = io.BytesIO()
+        Image.fromarray(frame).save(img_bytes, format="JPEG")
+        img_bytes.seek(0)
 
-        # Paso 3️⃣ — Convertir el fotograma a bytes
-        _, buffer = cv2.imencode(".jpg", frame)
-        image_bytes = buffer.tobytes()
-
-        # Paso 4️⃣ — Enviar imagen al modelo BLIP para obtener descripción
+        # Paso 4️⃣ — Enviar imagen al modelo de Hugging Face
         response = requests.post(
             HF_API_URL,
             headers={"Content-Type": "application/octet-stream"},
-            data=image_bytes,
+            data=img_bytes.read(),
             timeout=60
         )
 
         result = response.json()
 
-        # Paso 5️⃣ — Devolver descripción generada
+        # Paso 5️⃣ — Devolver la descripción
         if isinstance(result, list) and "generated_text" in result[0]:
             return {"description": result[0]["generated_text"]}
         else:
@@ -53,9 +53,6 @@ def generate_descriptive_subtitles(video_url):
 
 @app.route("/describe_video", methods=["POST"])
 def describe_video_endpoint():
-    """
-    Endpoint principal para generar subtítulos descriptivos
-    """
     data = request.get_json()
     video_url = data.get("url")
 
