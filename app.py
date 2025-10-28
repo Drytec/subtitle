@@ -5,7 +5,7 @@ import requests
 
 app = FastAPI()
 
-model = pipeline("automatic-speech-recognition", model="openai/whisper-tiny")
+model = pipeline("automatic-speech-recognition", model="openai/whisper-tiny.en")
 
 @app.post("/subtitles")
 async def generate_subtitles(file: UploadFile):
@@ -24,7 +24,11 @@ async def generate_subtitles_from_url(url: str = Form(...)):
         return {"error": f"No se pudo descargar el video desde {url}"}
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        size = 0
         for chunk in response.iter_content(chunk_size=8192):
+            size += len(chunk)
+            if size > 15 * 1024 * 1024:  
+                break
             tmp.write(chunk)
         tmp_path = tmp.name
 
