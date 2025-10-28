@@ -1,19 +1,15 @@
 from flask import Flask, request, jsonify
-import requests, os, tempfile, time
+import requests, cv2, tempfile, os
 
 app = Flask(__name__)
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-HEADERS = {"authorization": ASSEMBLYAI_API_KEY}
 
-@app.route("/generate_subtitles", methods=["POST"])
-def generate_subtitles():
+# Modelo gratuito de Hugging Face
+HF_API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+
+
+def generate_descriptive_subtitles(video_url):
     try:
-        data = request.get_json()
-        video_url = data.get("url")
-        if not video_url:
-            return jsonify({"error": "Falta el campo 'url'"}), 400
-
-        # 🔹 Paso 1: Descargar el video temporalmente
+        # Paso 1️⃣ — Descargar el video temporalmente
         headers = {"User-Agent": "Mozilla/5.0"}
         with requests.get(video_url, headers=headers, stream=True, timeout=60) as r:
             r.raise_for_status()
@@ -22,48 +18,60 @@ def generate_subtitles():
                     tmp.write(chunk)
                 tmp_path = tmp.name
 
-        # 🔹 Paso 2: Subir a AssemblyAI
-        with open(tmp_path, "rb") as f:
-            upload_res = requests.post("https://api.assemblyai.com/v2/upload", headers=HEADERS, data=f)
-        upload_res.raise_for_status()
-        audio_url = upload_res.json()["upload_url"]
+        # Paso 2️⃣ — Capturar un fotograma representativo (segundo 2)
+        cap = cv2.VideoCapture(tmp_path)
+        cap.set(cv2.CAP_PROP_POS_MSEC, 2000)
+        success, frame = cap.read()
+        cap.release()
 
-        # 🔹 Paso 3: Crear transcripción
-        transcript_res = requests.post(
-            "https://api.assemblyai.com/v2/transcript",
-            json={"audio_url": audio_url, "speaker_labels": False, "language_detection": True},
-            headers=HEADERS
+        if not success:
+            return {"error": "No se pudo leer el video o está dañado"}
+
+        # Paso 3️⃣ — Convertir el fotograma a bytes
+        _, buffer = cv2.imencode(".jpg", frame)
+        image_bytes = buffer.tobytes()
+
+        # Paso 4️⃣ — Enviar imagen al modelo BLIP para obtener descripción
+        response = requests.post(
+            HF_API_URL,
+            headers={"Content-Type": "application/octet-stream"},
+            data=image_bytes,
+            timeout=60
         )
-        transcript_res.raise_for_status()
-        transcript_id = transcript_res.json()["id"]
 
-        return jsonify({
-            "message": "Transcripción iniciada",
-            "transcript_id": transcript_id
-        })
+        result = response.json()
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/get_subtitles/<transcript_id>")
-def get_subtitles(transcript_id):
-    try:
-        while True:
-            polling = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=HEADERS)
-            data = polling.json()
-            if data["status"] == "completed":
-                return jsonify({
-                    "text": data["text"],
-                    "subtitles": data.get("words", [])
-                })
-            elif data["status"] == "error":
-                return jsonify({"error": data["error"]}), 500
-            time.sleep(5)
+        # Paso 5️⃣ — Devolver descripción generada
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return {"description": result[0]["generated_text"]}
+        else:
+            return {"error": "No se pudo generar la descripción", "details": result}
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
+
+
+@app.route("/describe_video", methods=["POST"])
+def describe_video_endpoint():
+    """
+    Endpoint principal para generar subtítulos descriptivos
+    """
+    data = request.get_json()
+    video_url = data.get("url")
+
+    if not video_url:
+        return jsonify({"error": "Falta el campo 'url'"}), 400
+
+    result = generate_descriptive_subtitles(video_url)
+    return jsonify(result)
+
+
+@app.route("/")
+def home():
+    return jsonify({
+        "message": "API activa. Usa POST /describe_video con {'url': 'URL_DEL_VIDEO'} para generar subtítulos descriptivos."
+    })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
